@@ -11,6 +11,7 @@ from telegram import Bot
 # ✅ API URLs (убраны лишние пробелы в конце)
 FEEDBACK_API = "https://feedbacks-api.wildberries.ru/api/v1/feedbacks"
 CARDS_API = "https://suppliers-api.wildberries.ru/content/v2/get/cards/list"
+PING_API = "https://feedbacks-api.wildberries.ru/ping"
 
 # ✅ Рабочие токены (для безопасности лучше вынести в переменные окружения)
 WILDBERRIES_FEEDBACK_TOKEN = (
@@ -91,8 +92,11 @@ def get_all_feedbacks(feedback_token: str) -> List[Dict[str, Any]]:
     header_variants: List[Dict[str, str]] = [
         {"Authorization": feedback_token},
         {"Authorization": f"Bearer {feedback_token}"},
-        {"X-Authorization": feedback_token},
-        {"X-Authorization": f"Bearer {feedback_token}"},
+        {"Authorization": feedback_token, "X-Authorization": feedback_token},
+        {
+            "Authorization": f"Bearer {feedback_token}",
+            "X-Authorization": f"Bearer {feedback_token}",
+        },
     ]
     common_headers = {"Accept": "application/json"}
     feedbacks: List[Dict[str, Any]] = []
@@ -120,6 +124,7 @@ def get_all_feedbacks(feedback_token: str) -> List[Dict[str, Any]]:
                     if response.status_code in (401, 403):
                         print("   ⛔ Доступ запрещен. Проверьте валидность и права токена.")
                     print(f"   Ответ: {snippet}")
+                    print(f"   Использованные заголовки: {merged_headers}")
                     continue
 
                 data = response.json()
@@ -420,13 +425,32 @@ def main() -> None:
 
     print("✅ Токены загружены, начинаем анализ...")
 
-    # 1. Получаем все отзывы
+    # 1. Проверка соединения с сервисом отзывов
+    try:
+        ping_resp = requests.get(
+            PING_API,
+            headers={
+                "Authorization": f"Bearer {feedback_token}",
+                "Accept": "application/json",
+            },
+            timeout=15,
+        )
+        if ping_resp.status_code != 200:
+            print(
+                f"⚠️ Ping неуспешен ({ping_resp.status_code}). Попробуем продолжить, но проверьте токен"
+            )
+        else:
+            print("✅ Ping отзывов OK")
+    except Exception as e:
+        print(f"⚠️ Ping ошибка: {e}")
+
+    # 2. Получаем все отзывы
     all_feedbacks = get_all_feedbacks(feedback_token)
     if not all_feedbacks:
         print("❌ Не удалось получить отзывы")
         return
 
-    # 2. Собираем артикулы
+    # 3. Собираем артикулы
     articles_set = set()
     for fb in all_feedbacks:
         article = _normalize_article_from_feedback(fb)
@@ -438,19 +462,19 @@ def main() -> None:
     if articles:
         print(f"📋 Первые артикулы: {articles[:5]}")
 
-    # 3. Названия (если есть артикулы)
+    # 4. Названия (если есть артикулы)
     article_to_name = get_product_names(articles, cards_token) if articles else {}
 
-    # 4. Анализ: до 5 самых свежих отзывов для каждого товара
+    # 5. Анализ: до 5 самых свежих отзывов для каждого товара
     report_data = analyze_latest_reviews_per_product(all_feedbacks, article_to_name)
 
-    # 5. Показываем результат в консоли
+    # 6. Показываем результат в консоли
     display_results(report_data)
 
-    # 6. Создаём Excel
+    # 7. Создаём Excel
     filename = create_excel(report_data)
 
-    # 7. Отправка в Telegram (опционально)
+    # 8. Отправка в Telegram (опционально)
     if TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID:
         asyncio.run(send_to_telegram(filename, len(report_data)))
 
