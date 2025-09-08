@@ -87,7 +87,14 @@ def get_all_feedbacks(feedback_token: str) -> List[Dict[str, Any]]:
         print("❌ Отсутствует токен для получения отзывов")
         return []
 
-    headers = {"Authorization": feedback_token}
+    # Попробуем разные варианты заголовков авторизации
+    header_variants: List[Dict[str, str]] = [
+        {"Authorization": feedback_token},
+        {"Authorization": f"Bearer {feedback_token}"},
+        {"X-Authorization": feedback_token},
+        {"X-Authorization": f"Bearer {feedback_token}"},
+    ]
+    common_headers = {"Accept": "application/json"}
     feedbacks: List[Dict[str, Any]] = []
 
     # Первичная попытка для получения структуры
@@ -97,29 +104,40 @@ def get_all_feedbacks(feedback_token: str) -> List[Dict[str, Any]]:
     ]
 
     success = False
-    for i, params in enumerate(param_variants, 1):
-        print(f"🔄 Попытка #{i} с параметрами: {params}")
-        try:
-            response = requests.get(
-                FEEDBACK_API, headers=headers, params=params, timeout=30
-            )
-            print(f"   Статус: {response.status_code}")
-            if response.status_code != 200:
-                print(f"   Ошибка: {response.text[:200]}")
-                continue
+    attempt = 0
+    for headers in header_variants:
+        merged_headers = {**common_headers, **headers}
+        for params in param_variants:
+            attempt += 1
+            print(f"🔄 Попытка #{attempt} с заголовками {list(headers.keys())} и параметрами: {params}")
+            try:
+                response = requests.get(
+                    FEEDBACK_API, headers=merged_headers, params=params, timeout=30
+                )
+                print(f"   Статус: {response.status_code}")
+                if response.status_code != 200:
+                    snippet = response.text[:300] if response.text else str(response.content[:300])
+                    if response.status_code in (401, 403):
+                        print("   ⛔ Доступ запрещен. Проверьте валидность и права токена.")
+                    print(f"   Ответ: {snippet}")
+                    continue
 
-            data = response.json()
-            batch = _extract_feedback_batch(data)
-            if batch:
-                feedbacks.extend(batch[:100])
-                print(f"✅ Найдено отзывов: {len(batch)}")
-                success = True
-                break
-            else:
-                print("   Отзывы не найдены в ожидаемых ключах")
-                print(f"   Ключи ответа: {list(data) if isinstance(data, dict) else type(data)}")
-        except Exception as e:
-            print(f"   Исключение: {e}")
+                data = response.json()
+                batch = _extract_feedback_batch(data)
+                if batch:
+                    feedbacks.extend(batch[:100])
+                    print(f"✅ Найдено отзывов: {len(batch)}")
+                    success = True
+                    break
+                else:
+                    print("   Отзывы не найдены в ожидаемых ключах")
+                    print(
+                        f"   Ключи ответа: {list(data) if isinstance(data, dict) else type(data)}"
+                    )
+            except Exception as e:
+                print(f"   Исключение: {e}")
+        if success:
+            break
 
     if not success:
         print("❌ Все попытки неудачны")
@@ -136,9 +154,15 @@ def get_all_feedbacks(feedback_token: str) -> List[Dict[str, Any]]:
                 "order": "dateDesc",
             }
             try:
-                resp = requests.get(
-                    FEEDBACK_API, headers=headers, params=params, timeout=30
-                )
+                # Повторяем те же варианты заголовков, что и выше, пока не найдём рабочие
+                resp = None
+                for headers in header_variants:
+                    merged_headers = {**common_headers, **headers}
+                    resp = requests.get(
+                        FEEDBACK_API, headers=merged_headers, params=params, timeout=30
+                    )
+                    if resp.status_code == 200:
+                        break
                 if resp.status_code != 200:
                     break
                 data = resp.json()
