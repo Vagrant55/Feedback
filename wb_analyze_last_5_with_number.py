@@ -94,8 +94,6 @@ def get_all_feedbacks(feedback_token: str) -> List[Dict[str, Any]]:
     param_variants: List[Dict[str, Any]] = [
         {"take": 100, "skip": 0},
         {"take": 100, "skip": 0, "order": "dateDesc"},
-        {"take": 100, "skip": 0, "isAnswered": False},
-        {"take": 100, "skip": 0, "order": "dateDesc", "isAnswered": False},
     ]
 
     success = False
@@ -136,7 +134,6 @@ def get_all_feedbacks(feedback_token: str) -> List[Dict[str, Any]]:
                 "take": 100,
                 "skip": skip,
                 "order": "dateDesc",
-                "isAnswered": False,
             }
             try:
                 resp = requests.get(
@@ -244,12 +241,11 @@ def get_product_names(articles: List[str], cards_token: str) -> Dict[str, str]:
         return {art: "Ошибка запроса" for art in articles}
 
 
-def analyze_bad_reviews(
+def analyze_latest_reviews(
     feedbacks: List[Dict[str, Any]], article_to_name: Dict[str, str]
 ) -> List[Dict[str, Any]]:
-    print("📊 Ищем 5 самых свежих отзывов с оценкой ниже 5...")
+    print("📊 Ищем 5 самых свежих отзывов по всем товарам...")
 
-    # Фильтруем только отзывы с оценкой < 5 (поддерживаем альтернативные поля)
     def _extract_rating(fb: Dict[str, Any]) -> Optional[int]:
         for key in ("productValuation", "rating", "valuation"):
             val = fb.get(key)
@@ -260,9 +256,8 @@ def analyze_bad_reviews(
                     continue
         return None
 
-    bad_reviews = [fb for fb in feedbacks if (_extract_rating(fb) or 0) < 5]
-    if not bad_reviews:
-        print("✅ Плохих отзывов не найдено!")
+    if not feedbacks:
+        print("📭 Отзывы не найдены")
         return []
 
     # Сортируем по дате: самые свежие сначала (поддерживаем разные ключи даты)
@@ -272,13 +267,13 @@ def analyze_bad_reviews(
                 return _safe_iso_to_datetime(fb.get(key))
         return datetime.min
 
-    bad_reviews.sort(key=_extract_date, reverse=True)
+    sorted_feedbacks = sorted(feedbacks, key=_extract_date, reverse=True)
 
     # Берем только 5 самых свежих
-    top_5_bad = bad_reviews[:5]
+    top_5 = sorted_feedbacks[:5]
 
     result: List[Dict[str, Any]] = []
-    for idx, fb in enumerate(top_5_bad, 1):
+    for idx, fb in enumerate(top_5, 1):
         article = _normalize_article_from_feedback(fb) or "Не найден"
 
         rating = _extract_rating(fb)
@@ -315,7 +310,7 @@ def analyze_bad_reviews(
             }
         )
 
-    print(f"✅ Найдено {len(bad_reviews)} плохих отзывов, показываем 5 самых свежих")
+    print("✅ Показаны 5 самых свежих отзывов")
     return result
 
 
@@ -324,7 +319,7 @@ def create_excel(data: List[Dict[str, Any]]) -> Optional[str]:
         print("📭 Нет данных для отчёта")
         return None
 
-    filename = f"WB_плохие_отзывы_{datetime.now().strftime('%d%m%Y_%H%M')}.xlsx"
+    filename = f"WB_свежие_отзывы_{datetime.now().strftime('%d%m%Y_%H%M')}.xlsx"
 
     try:
         df = pd.DataFrame(data)
@@ -348,9 +343,9 @@ async def send_to_telegram(filename: Optional[str], count: int) -> None:
     try:
         bot = Bot(token=TELEGRAM_BOT_TOKEN)
         message = (
-            f"⚠️ Найдено {count} свежих отзывов с оценкой < 5"
+            f"🕑 Топ-5 свежих отзывов сформирован (всего {count})"
             if count > 0
-            else "🟢 Плохих отзывов не найдено!"
+            else "📭 Свежих отзывов не найдено"
         )
 
         await bot.send_message(chat_id=TELEGRAM_CHAT_ID, text=message)
@@ -370,7 +365,7 @@ def display_results(data: List[Dict[str, Any]]) -> None:
         return
 
     print("\n" + "=" * 80)
-    print("⚠️  5 САМЫХ СВЕЖИХ ПЛОХИХ ОТЗЫВОВ (ОЦЕНКА < 5)")
+    print("🕑  5 САМЫХ СВЕЖИХ ОТЗЫВОВ ПО ВСЕМ ТОВАРАМ")
     print("=" * 80)
 
     for item in data:
@@ -417,8 +412,8 @@ def main() -> None:
     # 3. Названия (если есть артикулы)
     article_to_name = get_product_names(articles, cards_token) if articles else {}
 
-    # 4. Анализ: поиск 5 самых свежих плохих отзывов
-    report_data = analyze_bad_reviews(all_feedbacks, article_to_name)
+    # 4. Анализ: 5 самых свежих отзывов по всем товарам
+    report_data = analyze_latest_reviews(all_feedbacks, article_to_name)
 
     # 5. Показываем результат в консоли
     display_results(report_data)
