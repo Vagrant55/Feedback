@@ -1,0 +1,226 @@
+# wb_analyze_last_5_with_number.py
+import requests
+import pandas as pd
+from datetime import datetime
+import asyncio
+import gspread
+from google.oauth2.service_account import Credentials
+from telegram import Bot
+from collections import defaultdict
+
+# === 🔐 НАСТРОЙКИ ===
+# ✅ Исправлено: убраны пробелы в конце URL
+FEEDBACK_API = "https://feedbacks-api.wildberries.ru/api/v1/feedbacks"
+CARDS_API = "https://suppliers-api.wildberries.ru/content/v2/get/cards/list"
+
+# ✅ Токены
+WILDBERRIES_FEEDBACK_TOKEN = "eyJhbGciOiJFUzI1NiIsImtpZCI6IjIwMjUwNTIwdjEiLCJ0eXAiOiJKV1QifQ.eyJlbnQiOjEsImV4cCI6MTc3MTUzNDgxOCwiaWQiOiIwMTk4Y2JkYi04NzIwLTdhZjMtOGU4ZS05ZTIyZjhmMjZkMjMiLCJpaWQiOjQxNTAzMjgwLCJvaWQiOjU2NzEzMSwicyI6MTI4LCJzaWQiOiI4YTNhYmRjMS0wMTdkLTQzMTgtOTI4MC0wNmU3OWRjNzllZmUiLCJ0IjpmYWxzZSwidWlkIjo0MTUwMzI4MH0.dxXdZp8WIuTAwLmcDa9YYog79jz-6iAWYajM0cP3Ul1-rQ82ZksWjp8Gx6JQhG8wlvn6JVJB9Ty45dpeaq0b_g"
+WILDBERRIES_CARDS_TOKEN = "eyJhbGciOiJFUzI1NiIsImtpZCI6IjIwMjUwNTIwdjEiLCJ0eXAiOiJKV1QifQ.eyJlbnQiOjEsImV4cCI6MTc3MjA1MDQ3MSwiaWQiOiIwMTk4ZWE5Ny1jMjY0LTcxMjgtODU4MC0xOTdkNTJhYjIzYTgiLCJpaWQiOjE5ODUzNjk5LCJvaWQiOjI5MDk0NywicyI6MTA3Mzc0MTgyNiwic2lkIjoiNWZmZDIyZjgtMWYzMi00MjMyLTk4NTMtZDZmOTk5MWMwNDI1IiwidCI6ZmFsc2UsInVpZCI6MTk4NTM2OTl9.0qwunxjymXMVaCfcDcr0gOaPS70EMENHo52x9VvMnyEFtoNjRf5JYKlTdpd7YD2h2Ln7gDmlm-RLHVGbLxeiuA"
+
+# Telegram
+TELEGRAM_BOT_TOKEN = "8391873182:AAHUykid30Fssju6OfnUtwv6uCc9ZFdazho"
+TELEGRAM_CHAT_ID = 935264202
+
+# Google Sheets — сервисный аккаунт
+SERVICE_ACCOUNT_INFO = {
+    "type": "service_account",
+    "project_id": "feedbacks-471412",
+    "private_key_id": "57b989e9f10318c7577bad8184b429eca71b2545",
+    "private_key": "-----BEGIN PRIVATE KEY-----\nMIIEvgIBADANBgkqhkiG9w0BAQEFAASCBKgwggSkAgEAAoIBAQDUp6q7XczzuQpX\nQzZXB29nom4NzRJ6EzKuyG9cZ45Lx8/tqSPHT6v09ygCprS9ZyBzL58J5cQgUz0c\nHMOB6yRKTRZ+oa+Q64HwVzcMYr3/xj0k1EsjRs2RDlkHijS1nSxkJSm6G+TDHEYB\nDqsFOj2pmKRzTUyJDBhsvZpOMzl+e/VaMrGMvc+qDELFL9sgAYnXbfdcKgoYQ/PV\nX+/SIaeWfrQfpCHDMYek8SC0hELnwuAG4w6yHN7FOAUF7iHOpQlgv+lZXdrtIyC6\nfvvpd9aKyuvVHpCxdIFyfOq1FxwdNxj3RDlKMP20A5PUdlRyCOvidAle/cCYthGU\nut/6ccs7AgMBAAECggEAPy5nqA6I97q5C08xZG8Vlu1oFFqjDDkK/GoZyBMOcI53\nxS1VL4EI3pnWPd9o4MM0nXR/JJIrEM2aYPFc1wtVd2vq7Im+X2jRbOaEuP3XZJhy\nDzCx+FOvfNMN+ZMC8Ri3GTP/b0edUqjiVasVfdKdgneTGJzVSfyZfylgIK7QfLbt\nkH/+e4msM7OPh5ejtgFyL9rQ3hNXwqtbnAAKirzdbeut8zWGQaXvuDQw9hPEiOeH\npxex+Ro4gRBzbcAaJ7aUJLe3ZftQ+cTPM2EOVOJ1byTRA6R5PSMuWIOFoXdFB+rr\n4kFC8v5C52YIdqRQbcIPkrM7+jobtPjTHKXpM4wueQKBgQD8MDzMrUHjZm4+dxpM\nNxG0MI2Rqx/KPezcMab+CYfCTLkhJ/znAbjNmSJU5rUw0WUOqxurTIsQFT2mPwGv\nRdK/IUbp1BbH4iqDjY8I81fO3zgYaQxvro2M5PM8p32BQZbPlOy69G+b1X+KlHvr\nbybo3bLAimQdl7Uh8viPO7OUIwKBgQDX3neer2AosqnaYDm1rFTt29+vMZKyDR0u\nTQ17WRRSflPAgvNTxeSmKlZYBjOj757D65SthJuqoikhDcf/VtT1+cRRc+aG4Ii6\n1WlbLNxPWuyJA84r5ws5AJsUH4+KZRbwK4WNhFPOdU3qpaFf/A86XaQEGKS76SCl\ng35OR85yCQKBgQCMTpIlFefoip6fZkhdSu4woCrDdr+zF4zmXUGZaNf9RA5j4gmU\nxKJ60M4HCmyYgoeFB7HXNjjQc+De04Mubtx3th3sDjG2d6BLnMCNrEWYNRzSh++B\nW04pq1+gyVbMSR+M0kB7K2/E9Z2GDmJ7dFXjjSTcdqKIzFTcVH/xwLeCnQKBgQDQ\nfMyLNlZo+CWUA9u42vgrwnAHhJlp3cCRN1oOB7rY8alyBQd9oWN0GO/LlDHL42Iz\nVxQBglHWO0f95JGEyxhjeRdik83R9ooX6IYYyPr+qZJJwqMdQ8hTBYLBrLm1sGy3\nCVGznFpUzHa0acOyMH+En2wJiMORuVcOhDE46aE6AQKBgA3Ah2KCTKJo80i5AqTZ\nkUqJhVzKUzJ31FF5z0xgoplfx/oFG9r4b1DbC4uwDBiNW/E8QGNCoqdllawvTPlw\nzeYio/ApGKvK+UlxYnoENuGdYGxO5nTg+PrO0coWZXJ0hP0M9LYizwt0NSu9pmvO\nY2EjRvJYhaDwf9Npk8LVd7tX\n-----END PRIVATE KEY-----\n",
+    "client_email": "fedbakcs-alekseeva@feedbacks-471412.iam.gserviceaccount.com",
+    "client_id": "102342325879328211861",
+    "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+    "token_uri": "https://oauth2.googleapis.com/token",
+    "auth_provider_x509_cert_url": "https://www.googleapis.com/oauth2/v1/certs",
+    "client_x509_cert_url": "https://www.googleapis.com/robot/v1/metadata/x509/fedbakcs-alekseeva%40feedbacks-471412.iam.gserviceaccount.com",
+    "universe_domain": "googleapis.com"
+}
+GOOGLE_SHEET_NAME = "Wildberries_Feedbacks"  # ← Убедись, что таблица существует
+
+# --- 1. Получаем ВСЕ отзывы ---
+def get_all_feedbacks():
+    print("🔍 Получаем все отзывы...")
+    headers = {"Authorization": WILDBERRIES_FEEDBACK_TOKEN}
+    feedbacks = []
+    skip = 0
+
+    while True:
+        params = {"take": 100, "skip": skip, "order": "dateDesc"}
+        try:
+            response = requests.get(FEEDBACK_API, headers=headers, params=params)
+            if response.status_code != 200:
+                print(f"❌ Ошибка API: {response.status_code}")
+                print("Текст ошибки:", response.text)
+                break
+
+            batch = response.json().get("feedbacks", [])
+            if not batch:
+                break
+
+            feedbacks.extend(batch)
+
+            if len(batch) < 100:
+                break
+            skip += 100
+
+        except Exception as e:
+            print("❌ Ошибка:", str(e))
+            break
+
+    print(f"✅ Загружено {len(feedbacks)} отзывов")
+    return feedbacks
+
+# --- 2. Получаем названия товаров ---
+def get_product_names(articles):
+    if not articles:
+        return {}
+
+    print(f"📌 Получаем названия для {len(articles)} товаров...")
+    headers = {"Authorization": WILDBERRIES_CARDS_TOKEN}
+    payload = {
+        "query": {
+            "limit": 100,
+            "filters": [
+                {
+                    "column": "supplierArticle",
+                    "filter": articles,
+                    "operator": "IN"
+                }
+            ]
+        }
+    }
+
+    try:
+        response = requests.post(CARDS_API, json=payload, headers=headers)
+        if response.status_code != 200:
+            print("❌ Ошибка API карточек:", response.text)
+            return {art: "Ошибка" for art in articles}
+
+        cards = response.json().get("cards", [])
+        return {
+            card["supplierArticle"]: card.get("title", "Без названия")
+            for card in cards
+        }
+    except Exception as e:
+        print("❌ Ошибка:", str(e))
+        return {art: "Ошибка" for art in articles}
+
+# --- 3. Анализ: по каждому товару — 5 свежих отзывов, фильтр <5 ---
+def analyze_per_product_last_5(feedbacks, article_to_name):
+    print("📊 Анализируем: 5 свежих отзывов по каждому товару...")
+    from collections import defaultdict
+
+    grouped = defaultdict(list)
+    for fb in feedbacks:
+        grouped[fb["supplierArticle"]].append(fb)
+
+    result = []
+
+    for article, fbs in grouped.items():
+        # Сортируем по дате: свежие сначала
+        sorted_fbs = sorted(fbs, key=lambda x: x["createdDate"], reverse=True)
+        last_5 = sorted_fbs[:5]  # только 5 самых свежих
+
+        for idx, fb in enumerate(last_5, 1):  # idx = 1, 2, 3, 4, 5
+            if fb.get("productValuation") < 5:
+                result.append({
+                    "Название товара": article_to_name.get(article, "Не найдено"),
+                    "Артикул": article,
+                    "Номер отзыва (внутри товара)": idx,  # 1 = самый свежий
+                    "Дата отзыва": fb["createdDate"][:10],
+                    "Оценка": fb["productValuation"],
+                    "Текст отзыва": fb.get("text", "—")
+                })
+
+    # Сортируем результат по дате: свежие сверху
+    result.sort(key=lambda x: x["Дата отзыва"], reverse=True)
+
+    print(f"✅ Найдено {len(result)} отзывов с оценкой <5 (по 5 на товар)")
+    return result
+
+# --- 4. Создаём Excel ---
+def create_excel(data):
+    if not data:
+        print("📭 Нет данных для отчёта")
+        return None
+
+    filename = f"WB_низкие_в_последних_5_с_номерами_{datetime.now().strftime('%d%m%Y')}.xlsx"
+    df = pd.DataFrame(data)
+    df.to_excel(filename, index=False)
+    print(f"✅ Файл создан: {filename}")
+    return filename
+
+# --- 5. Сохранение в Google Таблицу ---
+def save_to_google_sheets(data):
+    print("📤 Сохраняем в Google Таблицу...")
+    try:
+        scopes = ["https://www.googleapis.com/auth/spreadsheets"]
+        credentials = Credentials.from_service_account_info(SERVICE_ACCOUNT_INFO, scopes=scopes)
+        client = gspread.authorize(credentials)
+        sheet = client.open(GOOGLE_SHEET_NAME).sheet1
+        sheet.clear()
+        # Заголовки
+        sheet.append_row([
+            "Название товара", "Артикул", "Номер отзыва", 
+            "Дата отзыва", "Оценка", "Текст отзыва"
+        ])
+        # Данные
+        for row in data:
+            sheet.append_row([
+                row["Название товара"],
+                row["Артикул"],
+                row["Номер отзыва (внутри товара)"],
+                row["Дата отзыва"],
+                str(row["Оценка"]),
+                row["Текст отзыва"]
+            ])
+        print(f"✅ Данные сохранены в Google Таблицу: {GOOGLE_SHEET_NAME}")
+    except Exception as e:
+        print(f"❌ Ошибка Google Sheets: {str(e)}")
+
+# --- 6. Отправка в Telegram ---
+async def send_to_telegram(filename, count):
+    bot = Bot(token=TELEGRAM_BOT_TOKEN)
+    if count == 0:
+        message = "🟢 В последних 5 отзывах всех товаров — только оценки 5 ⭐"
+    else:
+        message = f"⚠️ Найдено {count} отзывов с оценкой <5 среди последних 5 отзывов по товарам"
+
+    try:
+        await bot.send_message(chat_id=TELEGRAM_CHAT_ID, text=message)
+        if filename:
+            await bot.send_document(chat_id=TELEGRAM_CHAT_ID, document=open(filename, "rb"))
+        print("✅ Отчёт отправлен в Telegram!")
+    except Exception as e:
+        print("❌ Ошибка отправки:", str(e))
+
+# === 🚀 ЗАПУСК ===
+def main():
+    print(f"📅 Запуск: {datetime.now().strftime('%d.%m.%Y %H:%M')}")
+
+    # 1. Получаем все отзывы
+    all_feedbacks = get_all_feedbacks()
+    if not all_feedbacks:
+        asyncio.run(send_to_telegram(None, 0))
+        return
+
+    # 2. Все артикулы
+    articles = list({fb["supplierArticle"] for fb in all_feedbacks})
+
+    # 3. Названия
+    article_to_name = get_product_names(articles)
+
+    # 4. Анализ: по каждому товару — последние 5 отзывов
+    report_data = analyze_per_product_last_5(all_feedbacks, article_to_name)
+
+    # 5. Excel
+    filename = create_excel(report_data)
+
+    # 6. Google Таблица
+    save_to_google_sheets(report_data)
+
+    # 7. Отправка
+    asyncio.run(send_to_telegram(filename, len(report_data)))
+
+if __name__ == "__main__":
+    main()
