@@ -241,10 +241,10 @@ def get_product_names(articles: List[str], cards_token: str) -> Dict[str, str]:
         return {art: "Ошибка запроса" for art in articles}
 
 
-def analyze_latest_reviews(
+def analyze_latest_reviews_per_product(
     feedbacks: List[Dict[str, Any]], article_to_name: Dict[str, str]
 ) -> List[Dict[str, Any]]:
-    print("📊 Ищем 5 самых свежих отзывов по всем товарам...")
+    print("📊 Ищем по каждому товару до 5 самых свежих отзывов...")
 
     def _extract_rating(fb: Dict[str, Any]) -> Optional[int]:
         for key in ("productValuation", "rating", "valuation"):
@@ -256,61 +256,66 @@ def analyze_latest_reviews(
                     continue
         return None
 
-    if not feedbacks:
-        print("📭 Отзывы не найдены")
-        return []
-
-    # Сортируем по дате: самые свежие сначала (поддерживаем разные ключи даты)
     def _extract_date(fb: Dict[str, Any]) -> datetime:
         for key in ("createdDate", "createdAt", "date"):
             if key in fb:
                 return _safe_iso_to_datetime(fb.get(key))
         return datetime.min
 
-    sorted_feedbacks = sorted(feedbacks, key=_extract_date, reverse=True)
+    # Группируем отзывы по артикулу
+    article_to_feedbacks: Dict[str, List[Dict[str, Any]]] = {}
+    for fb in feedbacks:
+        article = _normalize_article_from_feedback(fb)
+        if not article:
+            continue
+        article_to_feedbacks.setdefault(article, []).append(fb)
 
-    # Берем только 5 самых свежих
-    top_5 = sorted_feedbacks[:5]
-
+    # Для каждого артикула берём до 5 свежих отзывов
     result: List[Dict[str, Any]] = []
-    for idx, fb in enumerate(top_5, 1):
-        article = _normalize_article_from_feedback(fb) or "Не найден"
+    for article, fbs in article_to_feedbacks.items():
+        fbs_sorted = sorted(fbs, key=_extract_date, reverse=True)
+        top_n = fbs_sorted[:5]
 
-        rating = _extract_rating(fb)
-        rating_display: Any = rating if rating is not None else "N/A"
-
-        # Получаем дату
-        created_dt = _extract_date(fb)
-        date_part = created_dt.strftime("%Y-%m-%d") if created_dt != datetime.min else "N/A"
-        time_part = created_dt.strftime("%H:%M") if created_dt != datetime.min else ""
-
-        # Название товара: из productDetails или из карты
+        # Определяем название товара
         product_name = "Не найдено"
-        product_details = fb.get("productDetails")
-        if isinstance(product_details, dict):
-            product_name = product_details.get("productName", "Не найдено")
+        # Пытаемся взять название из первого отзыва productDetails
+        if top_n:
+            pdict = top_n[0].get("productDetails")
+            if isinstance(pdict, dict):
+                product_name = pdict.get("productName", "Не найдено")
         if product_name == "Не найдено":
             product_name = article_to_name.get(article, "Не найдено")
 
-        # Текст отзыва (безопасно приводим к строке)
-        raw_text = fb.get("text")
-        text_str = str(raw_text) if raw_text is not None else "—"
-        if len(text_str) > 300:
-            text_str = text_str[:300] + "..."
+        for idx, fb in enumerate(top_n, 1):
+            rating = _extract_rating(fb)
+            rating_display: Any = rating if rating is not None else "N/A"
 
-        result.append(
-            {
-                "Номер": idx,
-                "Название товара": product_name,
-                "Артикул": article,
-                "Дата отзыва": date_part,
-                "Время": time_part,
-                "Оценка": rating_display,
-                "Текст отзыва": text_str,
-            }
-        )
+            created_dt = _extract_date(fb)
+            date_part = (
+                created_dt.strftime("%Y-%m-%d") if created_dt != datetime.min else "N/A"
+            )
+            time_part = created_dt.strftime("%H:%M") if created_dt != datetime.min else ""
 
-    print("✅ Показаны 5 самых свежих отзывов")
+            raw_text = fb.get("text")
+            text_str = str(raw_text) if raw_text is not None else "—"
+            if len(text_str) > 300:
+                text_str = text_str[:300] + "..."
+
+            result.append(
+                {
+                    "Номер": idx,
+                    "Название товара": product_name,
+                    "Артикул": article,
+                    "Дата отзыва": date_part,
+                    "Время": time_part,
+                    "Оценка": rating_display,
+                    "Текст отзыва": text_str,
+                }
+            )
+
+    print(
+        f"✅ Сформирован список: товаров {len(article_to_feedbacks)}, записей {len(result)}"
+    )
     return result
 
 
@@ -319,7 +324,7 @@ def create_excel(data: List[Dict[str, Any]]) -> Optional[str]:
         print("📭 Нет данных для отчёта")
         return None
 
-    filename = f"WB_свежие_отзывы_{datetime.now().strftime('%d%m%Y_%H%M')}.xlsx"
+    filename = f"WB_до5_свежих_по_каждому_{datetime.now().strftime('%d%m%Y_%H%M')}.xlsx"
 
     try:
         df = pd.DataFrame(data)
@@ -343,7 +348,7 @@ async def send_to_telegram(filename: Optional[str], count: int) -> None:
     try:
         bot = Bot(token=TELEGRAM_BOT_TOKEN)
         message = (
-            f"🕑 Топ-5 свежих отзывов сформирован (всего {count})"
+            f"🕑 По каждому товару отобрано до 5 свежих отзывов (всего записей: {count})"
             if count > 0
             else "📭 Свежих отзывов не найдено"
         )
@@ -365,7 +370,7 @@ def display_results(data: List[Dict[str, Any]]) -> None:
         return
 
     print("\n" + "=" * 80)
-    print("🕑  5 САМЫХ СВЕЖИХ ОТЗЫВОВ ПО ВСЕМ ТОВАРАМ")
+    print("🕑  ДО 5 СВЕЖИХ ОТЗЫВОВ ПО КАЖДОМУ ТОВАРУ")
     print("=" * 80)
 
     for item in data:
@@ -412,8 +417,8 @@ def main() -> None:
     # 3. Названия (если есть артикулы)
     article_to_name = get_product_names(articles, cards_token) if articles else {}
 
-    # 4. Анализ: 5 самых свежих отзывов по всем товарам
-    report_data = analyze_latest_reviews(all_feedbacks, article_to_name)
+    # 4. Анализ: до 5 самых свежих отзывов для каждого товара
+    report_data = analyze_latest_reviews_per_product(all_feedbacks, article_to_name)
 
     # 5. Показываем результат в консоли
     display_results(report_data)
